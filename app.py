@@ -2,6 +2,7 @@ from pathlib import Path
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 
 from config import APP_TITLE, DEFAULT_WORKBOOK, THRESHOLDS
 from data_layer import load_workbook, sales_rows
@@ -44,20 +45,100 @@ def render_insight(item, compact=False):
 
 def command_center(data):
     st.title("Command Center")
-    st.caption("What changed · what matters · where to look next")
-    metrics = kpis(data)
-    cols = st.columns(5)
-    labels = [("Total Sales", rupees(metrics["total_sales"])), ("MoM Sales Growth", f"{metrics['mom_growth']:+.1f}%" if metrics["mom_growth"] is not None else "—"), ("Purchase Value", rupees(metrics["purchase_value"])), ("Closing Inventory", rupees(metrics["closing_inventory"])), ("Active Products", f"{metrics['active_products']:,}")]
-    for col, (label, value) in zip(cols, labels): col.metric(label, value)
+    rows = sales_rows(data)
+    totals = data["MONTHLY_TOTALS"].copy()
+    months = sorted(totals.Month.dropna().unique())
+    if len(months) < 2:
+        st.info("At least two complete periods are needed for movement analysis.")
+        return
+    previous, current = months[-2:]
+    period_totals = totals.groupby("Month").agg(Sales=("Sale_Value", "sum"), Purchases=("Purchase_Value", "sum"), Closing=("Closing_Value", "sum")).sort_index()
+    prev_total, cur_total = period_totals.loc[previous], period_totals.loc[current]
+    delta = cur_total.Sales - prev_total.Sales
+    pct = delta / prev_total.Sales * 100 if prev_total.Sales else 0
+    agency = totals[totals.Month.isin([previous, current])].pivot_table(index="Agency", columns="Month", values="Sale_Value", aggfunc="sum", fill_value=0)
+    agency["Change"] = agency[current] - agency[previous]
+    lead_agency = agency.Change.abs().idxmax()
+    lead_change = agency.loc[lead_agency, "Change"]
+    lead_share = abs(lead_change / delta * 100) if delta else 0
+    st.caption(f"Latest reported period: {current:%B %Y} · compared with {previous:%B %Y}")
+    st.subheader(f"Sales fell {abs(pct):.1f}% — {lead_agency} accounts for {lead_share:.1f}% of the net change")
+    st.write(f"Sales moved from **{rupees(prev_total.Sales)}** to **{rupees(cur_total.Sales)}** ({rupees(delta)}). {lead_agency} changed by {rupees(lead_change)}; the other agency was {rupees(agency.drop(index=lead_agency).Change.sum()) if len(agency) > 1 else 'not separately reported'}. This locates the decline; it does not establish a cause.")
     cols = st.columns(4)
-    for col, label, key in zip(cols, ["Products Growing", "Products Declining", "High-potential Doctors", "Doctor/Product Opportunities"], ["products_growing", "products_declining", "high_potential_doctors", "doctor_product_opportunities"]): col.metric(label, f"{metrics[key]:,}")
-    insights = generate_insights(data)
-    st.subheader("Insights")
-    if not insights: st.info("No insights meet the configured rules for the data currently available.")
-    for item in insights[:10]: render_insight(item)
-    if len(insights) > 10:
-        with st.expander(f"Show all {len(insights)} generated insights"):
-            for item in insights[10:]: render_insight(item)
+    cols[0].metric("Latest sales", rupees(cur_total.Sales), f"{pct:+.1f}% vs prior")
+    cols[1].metric("Sales change", rupees(delta))
+    cols[2].metric("Purchases", rupees(cur_total.Purchases), f"{(cur_total.Purchases-prev_total.Purchases):+,.0f} vs prior")
+    cols[3].metric("Closing inventory value", rupees(cur_total.Closing), f"{(cur_total.Closing-prev_total.Closing):+,.0f} vs prior")
+
+    left, right = st.columns([1, 1.25])
+    with left:
+        st.markdown("#### Agency sales paths")
+        high_month = period_totals.Sales.idxmax()
+        recent_down = 0
+        for i in range(len(period_totals) - 1, 0, -1):
+            if period_totals.Sales.iloc[i] < period_totals.Sales.iloc[i - 1]: recent_down += 1
+            else: break
+        st.caption(f"Peak reported sales: {high_month:%b %Y} ({rupees(period_totals.loc[high_month, 'Sales'])}). Latest run: {recent_down} consecutive month-over-month decline(s).")
+        chart = totals.groupby(["Month", "Agency"], as_index=False).Sale_Value.sum()
+        fig = px.line(chart, x="Month", y="Sale_Value", color="Agency", markers=True, custom_data=["Agency"])
+        fig.update_traces(hovertemplate="%{customdata[0]}<br>%{x|%b %Y}: ₹%{y:,.0f}<extra></extra>")
+        fig.update_layout(height=340, margin=dict(l=5,r=5,t=15,b=5), legend_title_text="")
+        st.plotly_chart(fig, use_container_width=True)
+    with right:
+        st.markdown("#### What drove the latest change?")
+        st.caption("Product-level sales value change for the agency with the largest absolute agency movement.")
+        products = rows[rows.Agency.eq(lead_agency) & rows.Month.isin([previous, current])].pivot_table(index="Product", columns="Month", values="Value", aggfunc="sum", fill_value=0)
+        products = products.rename(columns={previous: "Prior", current: "Latest"})
+        products["Change"] = products["Latest"] - products["Prior"]
+        drivers = products.sort_values("Change").copy()
+        drivers = pd.concat([drivers.head(7), drivers.tail(7)]).drop_duplicates().sort_values("Change")
+        driver_fig = px.bar(drivers.reset_index(), x="Change", y="Product", orientation="h", color="Change", color_continuous_scale=["#c7473a", "#d9dfe7", "#31846b"], hover_data={"Prior":":,.0f","Latest":":,.0f","Change":":+,.0f"})
+        driver_fig.update_layout(height=430, margin=dict(l=5,r=5,t=10,b=5), coloraxis_showscale=False, xaxis_title="Change in sales value (₹)", yaxis_title="")
+        st.plotly_chart(driver_fig, use_container_width=True)
+        st.caption(f"Largest declines include: " + "; ".join(f"{p} ({rupees(v)})" for p,v in drivers.nsmallest(4,"Change")["Change"].items()) + ".")
+
+    st.markdown("#### Product sales vs stock movement")
+    st.caption(f"Each point compares {previous:%b} to {current:%b} for one {lead_agency} product. Right = sales rose; above = QOH rose. Stock value is not available at product level.")
+    p_rows = rows[rows.Agency.eq(lead_agency) & rows.Month.isin([previous,current])]
+    product_period = p_rows.groupby(["Product","Month"], as_index=False).agg(Sales_Value=("Value","sum"), Units_Sold=("Sale","sum"), QOH=("QOH","sum"), Age_Days=("Age","max"))
+    sales_wide = product_period.pivot(index="Product", columns="Month", values="Sales_Value").fillna(0)
+    qoh_wide = product_period.pivot(index="Product", columns="Month", values="QOH").fillna(0)
+    age_latest = product_period[product_period.Month.eq(current)].set_index("Product").Age_Days
+    plot = pd.DataFrame(index=sales_wide.index)
+    plot["Sales change"] = sales_wide[current] - sales_wide[previous]
+    plot["Sales change %"] = plot.apply(lambda r: (r["Sales change"] / sales_wide.loc[r.name, previous] * 100) if sales_wide.loc[r.name, previous] else None, axis=1)
+    plot["QOH change"] = qoh_wide[current] - qoh_wide[previous]
+    plot["Latest QOH"] = qoh_wide[current]
+    plot["Age (days)"] = age_latest
+    plot = plot.reset_index()
+    risk_count = int(((plot["Sales change"] < 0) & (plot["QOH change"] > 0)).sum())
+    st.info(f"{risk_count} products had falling sales value and rising QOH in {lead_agency} over this comparison. This describes simultaneous movement, not cause.")
+    scatter = px.scatter(plot, x="Sales change %", y="QOH change", size="Latest QOH", color="Age (days)", hover_name="Product", hover_data={"Sales change":":+,.0f","Sales change %":":+.1f","QOH change":":+,.0f","Latest QOH":":,.0f","Age (days)":":.0f"}, color_continuous_scale="Sunset")
+    scatter.add_hline(y=0, line_dash="dot", line_color="#8b95a1")
+    scatter.add_vline(x=0, line_dash="dot", line_color="#8b95a1")
+    scatter.add_annotation(x=0.99,y=0.02,xref="paper",yref="paper",text="Sales up · stock up",showarrow=False,font=dict(color="#777"))
+    scatter.update_layout(height=440, margin=dict(l=5,r=5,t=12,b=5), xaxis_title="Sales value change (%)", yaxis_title="QOH change (units)", coloraxis_colorbar_title="Age days")
+    st.plotly_chart(scatter, use_container_width=True)
+    st.markdown("#### Flow through the business")
+    flow_left, flow_right = st.columns(2)
+    month_flow = period_totals.reset_index()
+    with flow_left:
+        st.caption(f"Sales and purchases, ₹ · latest: sales {pct:+.1f}% vs prior; purchases {((cur_total.Purchases-prev_total.Purchases)/prev_total.Purchases*100 if prev_total.Purchases else 0):+.1f}%.")
+        flow = month_flow.melt(id_vars="Month", value_vars=["Sales", "Purchases"], var_name="Measure", value_name="₹")
+        flow_fig = px.bar(flow, x="Month", y="₹", color="Measure", barmode="group", color_discrete_map={"Sales":"#315c94","Purchases":"#56a88b"})
+        flow_fig.update_layout(height=320, margin=dict(l=5,r=5,t=10,b=5), legend_title_text="")
+        st.plotly_chart(flow_fig, use_container_width=True)
+    with flow_right:
+        stock_delta = cur_total.Closing - prev_total.Closing
+        st.caption(f"Agency-reported closing inventory value · latest change {rupees(stock_delta)} ({stock_delta/prev_total.Closing*100 if prev_total.Closing else 0:+.1f}%).")
+        stock_fig = px.area(month_flow, x="Month", y="Closing", markers=True, color_discrete_sequence=["#bc8744"])
+        stock_fig.update_layout(height=320, margin=dict(l=5,r=5,t=10,b=5), showlegend=False, yaxis_title="Closing inventory (₹)")
+        st.plotly_chart(stock_fig, use_container_width=True)
+    with st.expander("Inspect the underlying agency and product changes"):
+        agency_view = agency[[previous,current,"Change"]].copy().reset_index()
+        agency_view.columns = ["Agency", f"{previous:%b} sales", f"{current:%b} sales", "Change"]
+        st.dataframe(agency_view, hide_index=True, use_container_width=True)
+        st.dataframe(plot.sort_values("Sales change"), hide_index=True, use_container_width=True)
 
 def sales_page(data):
     st.title("Sales")

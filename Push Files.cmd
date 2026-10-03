@@ -20,18 +20,15 @@ if errorlevel 1 (
   if errorlevel 1 goto failed
 )
 
+set "REMOTE_URL=https://github.com/AslamGeek/stream-metrics.git"
 git remote get-url origin >nul 2>nul
 if errorlevel 1 (
-  echo.
-  echo Enter the URL of an empty GitHub/Git remote repository.
-  set /p "REMOTE_URL=Remote URL: "
-  if not defined REMOTE_URL (
-    echo ERROR: No remote URL was provided.
-    goto finish
-  )
   git remote add origin "%REMOTE_URL%"
-  if errorlevel 1 goto failed
+) else (
+  git remote set-url origin "%REMOTE_URL%"
 )
+if errorlevel 1 goto failed
+echo Push destination: %REMOTE_URL%
 
 for /f "delims=" %%N in ('git config user.name') do set "GIT_NAME=%%N"
 if not defined GIT_NAME (

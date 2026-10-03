@@ -9,7 +9,7 @@ from analytics import kpis, monthly_sales, product_change, agency_trends, data_q
 from insight_engine import generate_insights
 
 ROOT = Path(__file__).parent
-st.set_page_config(page_title=APP_TITLE, page_icon="◈", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title=APP_TITLE, page_icon="🎯", layout="wide", initial_sidebar_state="expanded")
 
 @st.cache_data(show_spinner="Reading workbook and preparing analysis…")
 def get_data(path, stamp):
@@ -144,21 +144,32 @@ def quality_page(data):
     st.caption("Empty operational sheets (including VISITS and POB_ACTIVITY) are intentionally excluded from analysis.")
 
 with st.sidebar:
-    st.title("◈ Sales Intelligence")
+    st.title("🎯 Sales Intelligence")
     default_path = str(ROOT / DEFAULT_WORKBOOK)
     st.text_input("Workbook path", value=st.session_state.get("workbook_path", default_path), key="workbook_path")
     st.caption("Source workbook is read-only. Replace the file or change this path to refresh analysis.")
     if st.button("Clear cached data", use_container_width=True): get_data.clear()
 
 data = selected_data()
-pages = {
-    "Command Center": st.Page(lambda: command_center(data), title="Command Center", icon="◈", default=True),
-    "Sales": st.Page(lambda: sales_page(data), title="Sales", icon="↗"),
-    "Products": st.Page(lambda: products_page(data), title="Products", icon="▦"),
-    "Doctors": st.Page(lambda: doctors_page(data), title="Doctors", icon="◎"),
-    "Inventory": st.Page(lambda: inventory_page(data), title="Inventory", icon="▤"),
-    "Agencies": st.Page(lambda: agencies_page(data), title="Agencies", icon="⌂"),
-    "Data Quality": st.Page(lambda: quality_page(data), title="Data Quality", icon="✓"),
-}
+
+# st.Page callables must be zero-argument page functions. Keep workbook loading
+# in the entrypoint so the cached data is shared by all seven pages.
+def command_center_page(): command_center(data)
+def sales_page_view(): sales_page(data)
+def products_page_view(): products_page(data)
+def doctors_page_view(): doctors_page(data)
+def inventory_page_view(): inventory_page(data)
+def agencies_page_view(): agencies_page(data)
+def data_quality_page(): quality_page(data)
+
+pages = [
+    st.Page(command_center_page, title="Command Center", icon="🎯", default=True),
+    st.Page(sales_page_view, title="Sales", icon="📈"),
+    st.Page(products_page_view, title="Products", icon="🧴"),
+    st.Page(doctors_page_view, title="Doctors", icon="🩺"),
+    st.Page(inventory_page_view, title="Inventory", icon="📦"),
+    st.Page(agencies_page_view, title="Agencies", icon="🏭"),
+    st.Page(data_quality_page, title="Data Quality", icon="✅"),
+]
 nav = st.navigation(pages)
 nav.run()

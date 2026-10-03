@@ -98,7 +98,7 @@ def command_center(data):
         st.caption(f"Largest declines include: " + "; ".join(f"{p} ({rupees(v)})" for p,v in drivers.nsmallest(4,"Change")["Change"].items()) + ".")
 
     st.markdown("#### Product sales vs stock movement")
-    st.caption(f"Each point compares {previous:%b} to {current:%b} for one {lead_agency} product. Right = sales rose; above = QOH rose. Stock value is not available at product level.")
+    st.caption(f"Each point compares {previous:%b} to {current:%b} for one {lead_agency} product with prior-period sales. Right = sales rose; above = QOH rose. Products with zero prior sales have no defined growth rate. Stock value is not available at product level.")
     p_rows = rows[rows.Agency.eq(lead_agency) & rows.Month.isin([previous,current])]
     product_period = p_rows.groupby(["Product","Month"], as_index=False).agg(Sales_Value=("Value","sum"), Units_Sold=("Sale","sum"), QOH=("QOH","sum"), Age_Days=("Age","max"))
     sales_wide = product_period.pivot(index="Product", columns="Month", values="Sales_Value").fillna(0)
@@ -113,7 +113,11 @@ def command_center(data):
     plot = plot.reset_index()
     risk_count = int(((plot["Sales change"] < 0) & (plot["QOH change"] > 0)).sum())
     st.info(f"{risk_count} products had falling sales value and rising QOH in {lead_agency} over this comparison. This describes simultaneous movement, not cause.")
-    scatter = px.scatter(plot, x="Sales change %", y="QOH change", size="Latest QOH", color="Age (days)", hover_name="Product", hover_data={"Sales change":":+,.0f","Sales change %":":+.1f","QOH change":":+,.0f","Latest QOH":":,.0f","Age (days)":":.0f"}, color_continuous_scale=["#f2d67a", "#db8c68", "#7b5b86"])
+    # QOH includes one source row with -1 units. Keep that raw value visible in
+    # hover, but clamp only the visual bubble size to Plotly's nonnegative range.
+    scatter_data = plot.dropna(subset=["Sales change %", "QOH change", "Age (days)"]).copy()
+    scatter_data["Bubble size"] = scatter_data["Latest QOH"].clip(lower=1)
+    scatter = px.scatter(scatter_data, x="Sales change %", y="QOH change", size="Bubble size", color="Age (days)", hover_name="Product", hover_data={"Bubble size":False,"Sales change":":+,.0f","Sales change %":":+.1f","QOH change":":+,.0f","Latest QOH":":,.0f","Age (days)":":.0f"}, color_continuous_scale=["#f2d67a", "#db8c68", "#7b5b86"])
     scatter.add_hline(y=0, line_dash="dot", line_color="#8b95a1")
     scatter.add_vline(x=0, line_dash="dot", line_color="#8b95a1")
     scatter.add_annotation(x=0.99,y=0.02,xref="paper",yref="paper",text="Sales up · stock up",showarrow=False,font=dict(color="#777"))

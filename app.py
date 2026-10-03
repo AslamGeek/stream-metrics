@@ -113,7 +113,7 @@ def command_center(data):
     plot = plot.reset_index()
     risk_count = int(((plot["Sales change"] < 0) & (plot["QOH change"] > 0)).sum())
     st.info(f"{risk_count} products had falling sales value and rising QOH in {lead_agency} over this comparison. This describes simultaneous movement, not cause.")
-    scatter = px.scatter(plot, x="Sales change %", y="QOH change", size="Latest QOH", color="Age (days)", hover_name="Product", hover_data={"Sales change":":+,.0f","Sales change %":":+.1f","QOH change":":+,.0f","Latest QOH":":,.0f","Age (days)":":.0f"}, color_continuous_scale="Sunset")
+    scatter = px.scatter(plot, x="Sales change %", y="QOH change", size="Latest QOH", color="Age (days)", hover_name="Product", hover_data={"Sales change":":+,.0f","Sales change %":":+.1f","QOH change":":+,.0f","Latest QOH":":,.0f","Age (days)":":.0f"}, color_continuous_scale=["#f2d67a", "#db8c68", "#7b5b86"])
     scatter.add_hline(y=0, line_dash="dot", line_color="#8b95a1")
     scatter.add_vline(x=0, line_dash="dot", line_color="#8b95a1")
     scatter.add_annotation(x=0.99,y=0.02,xref="paper",yref="paper",text="Sales up · stock up",showarrow=False,font=dict(color="#777"))
